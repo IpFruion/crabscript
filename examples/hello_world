@@ -1,0 +1,3 @@
+#!crabscript
+
+echo "hello" "world"

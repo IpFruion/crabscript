@@ -1,0 +1,3 @@
+[workspace]
+members = ["crabscript", "crabscript_cli", "crabscript_derive"]
+resolver = "2"

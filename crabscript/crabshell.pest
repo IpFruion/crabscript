@@ -1,0 +1,31 @@
+comment    = _{ "#" ~ (!NEWLINE ~ ANY)* }
+whitespace = _{ " " | "\t" }
+
+arg_qouted =  { ("\\\"" | (!"\"" ~ ANY))* }
+arg_raw    =  { (!whitespace ~ !NEWLINE ~ ANY)+ }
+arg        =  { !comment ~ ("\"" ~ arg_qouted ~ "\"" | arg_raw) }
+args       = _{ (whitespace* ~ (!whitespace ~ arg))* }
+
+ident  = { (ASCII_ALPHANUMERIC | "_")+ }
+label  = { ":" ~ ident }
+output = { ident ~ whitespace* ~ "=" }
+cmd    = { ident }
+
+cmd_instruction        = { cmd ~ (whitespace ~ args)? }
+script_instruction     = {
+    ((label ~ whitespace+)? ~ output? ~ whitespace* ~ cmd_instruction)
+  | label
+}
+preprocess_instruction = { "!" ~ cmd_instruction }
+end_of_instruction     = _{ whitespace* ~ comment? ~ NEWLINE? }
+empty_instruction      = _{ whitespace* ~ ((comment ~ NEWLINE?) | NEWLINE) }
+empty_rest_instruction = _{ whitespace* ~ EOI }
+instruction            = {
+    (whitespace* ~ preprocess_instruction ~ end_of_instruction)
+  | (whitespace* ~ script_instruction ~ end_of_instruction)
+  | empty_instruction
+}
+
+line = { (whitespace* ~ script_instruction ~ end_of_instruction) | empty_instruction}
+
+program = { SOI ~ (empty_rest_instruction | ( line+ ~ EOI )) }
