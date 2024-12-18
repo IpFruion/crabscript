@@ -5,7 +5,10 @@ use clap::{CommandFactory, FromArgMatches};
 use error::ParseInnerError;
 pub use error::{ParseError, ParseErrorKind};
 use miette::{NamedSource, SourceSpan};
-use pest::{iterators::Pairs, Parser};
+use pest::{
+    iterators::{Pair, Pairs},
+    Parser,
+};
 use pest_derive::Parser;
 
 use crate::{
@@ -15,8 +18,19 @@ use crate::{
 
 use super::{Directive, Instruction, Runtime};
 
+pub struct Span(SourceSpan);
+
+impl From<&pest::Span<'_>> for Span {
+    fn from(value: &pest::Span<'_>) -> Self {
+        Span(SourceSpan::new(
+            value.start().into(),
+            value.end() - value.start(),
+        ))
+    }
+}
+
 #[derive(Parser)]
-#[grammar = "crabshell.pest"]
+#[grammar = "crabscript.pest"]
 struct CrabShellParser;
 
 pub fn parse_runtime(ctx: Context, name: &str, src: String) -> Result<Runtime, ParseError> {
@@ -56,29 +70,60 @@ fn parse_directive(
     ctx: &Context,
     mut pairs: Pairs<'_, Rule>,
 ) -> Result<Directive, ParseInnerError> {
-    let script_instruction = pairs.next().expect("script_instruction");
-    match script_instruction.as_rule() {
-        Rule::label => Ok(Directive::GoTo(script_instruction.as_str().to_string())),
-        Rule::cmd_instruction => {
-            let whole_cmd = script_instruction.as_span();
-            let mut cmd = script_instruction.into_inner();
-            let name = cmd.next().expect("cmd").as_span();
-            let args: Vec<pest::Span> = cmd.map(|arg| arg.as_span()).collect();
-            let parser = ctx.get_parser(name.as_str()).ok_or_else(|| {
-                ParseErrorKind::CommandNotFound
-                    .into_inner_spanned_with_reason(&name, "command not found")
-            })?;
-            let instruction = parser.0(whole_cmd, &args)?;
-            Ok(Directive::Instruction {
-                span: SourceSpan::new(
-                    whole_cmd.start().into(),
-                    whole_cmd.end() - whole_cmd.start(),
-                ),
-                instruction,
-            })
-        }
-        _ => unreachable!("invalid script instruction"),
+    let mut label = None;
+    let mut output = None;
+
+    let mut piece = pairs.next().expect("at least one script_instruction");
+    if matches!(piece.as_rule(), Rule::label) {
+        let new_label = piece.into_inner().next().expect("ident").as_str().into();
+        let Some(next_piece) = pairs.next() else {
+            return Ok(Directive::GoTo(new_label));
+        };
+        label = Some(new_label);
+        piece = next_piece;
     }
+    if matches!(piece.as_rule(), Rule::output) {
+        output = Some(piece.into_inner().next().expect("ident").as_str().into());
+        piece = pairs.next().expect("at least cmd");
+    }
+    if matches!(piece.as_rule(), Rule::cmd_instruction) {
+        let (name, whole_cmd, args) = parse_cmd_instruction(piece);
+        let parser = ctx.get_parser(name.as_str()).ok_or_else(|| {
+            ParseErrorKind::CommandNotFound
+                .into_inner_spanned_with_reason(&name, "command not found")
+        })?;
+        let instruction = parser.0(whole_cmd, &args)?;
+        return Ok(Directive::Instruction {
+            label,
+            span: SourceSpan::new(
+                whole_cmd.start().into(),
+                whole_cmd.end() - whole_cmd.start(),
+            ),
+            instruction,
+            output,
+        });
+    }
+    unreachable!("invalid script instruction")
+}
+
+fn parse_cmd_instruction(
+    pair: Pair<'_, Rule>,
+) -> (pest::Span<'_>, pest::Span<'_>, Vec<pest::Span<'_>>) {
+    let whole_cmd = pair.as_span();
+    let mut cmd_instruction = pair.into_inner();
+    let name = cmd_instruction.next().expect("cmd").as_span();
+    let args: Vec<pest::Span> = parse_args(cmd_instruction);
+    (name, whole_cmd, args)
+}
+
+fn parse_args<'a>(args: impl Iterator<Item = Pair<'a, Rule>>) -> Vec<pest::Span<'a>> {
+    args.map(|arg| arg.into_inner().next().expect("inner arg"))
+        .map(|arg| match arg.as_rule() {
+            Rule::arg_raw => arg.as_span(),
+            Rule::arg_qouted => arg.as_span(),
+            _ => unreachable!("Not handled"),
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -112,6 +157,8 @@ impl InstructionParser {
 
 #[cfg(test)]
 mod tests {
+
+    use std::ops::Deref;
 
     use crate::command::CommandError;
 
@@ -213,5 +260,59 @@ mod tests {
             err.kind
         );
         println!("{:?}", miette::Report::new(err));
+    }
+
+    #[test]
+    fn test_parse_command_output() {
+        let mut context = Context::default();
+        context.add_command::<TestCommand>();
+
+        let runtime =
+            parse_runtime(context, "parse_test", "var = tc hello 32".to_string()).unwrap();
+        assert_eq!(runtime.directives.len(), 1);
+        match &runtime.directives[0] {
+            Directive::GoTo(_) => unreachable!(),
+            Directive::Instruction { label, output, .. } => {
+                assert!(label.is_none());
+                assert_eq!(output.as_deref(), Some("var"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_command_label() {
+        let mut context = Context::default();
+        context.add_command::<TestCommand>();
+
+        let runtime =
+            parse_runtime(context, "parse_test", ":label tc hello 32".to_string()).unwrap();
+        assert_eq!(runtime.directives.len(), 1);
+        match &runtime.directives[0] {
+            Directive::GoTo(_) => unreachable!(),
+            Directive::Instruction { label, output, .. } => {
+                assert!(output.is_none());
+                assert_eq!(label.as_deref(), Some("label"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_goto() {
+        let mut context = Context::default();
+        context.add_command::<TestCommand>();
+
+        let runtime = parse_runtime(context, "parse_test", ":label".to_string()).unwrap();
+        assert_eq!(runtime.directives.len(), 1);
+        assert!(matches!(&runtime.directives[0], Directive::GoTo(s) if s.deref().eq("label")));
+    }
+
+    #[test]
+    fn test_parsing_tree_sitter() {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_crabscript::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse("#Testing", None).unwrap();
+        println!("{tree:?}");
     }
 }

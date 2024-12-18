@@ -59,7 +59,7 @@ impl ParseInnerError {
                 let span = clap_err_arg_span(&err, args).unwrap_or(&cmd_span);
                 err_kind.into_inner_spanned_with_reason(span, reason)
             }
-            _ => err_kind.into_inner_spanned(&cmd_span),
+            _ => err_kind.into_inner_pest_spanned(&cmd_span),
         }
     }
 }
@@ -96,6 +96,15 @@ pub enum ParseErrorKind {
 }
 
 impl ParseErrorKind {
+    pub(super) fn into_parse_err(self, src: NamedSource<Arc<str>>) -> ParseError {
+        let len = src.inner().len();
+        ParseError {
+            kind: self,
+            src,
+            span: SourceSpan::new(0.into(), len),
+            reason: Default::default(),
+        }
+    }
     pub(super) fn into_inner_location(self, location: InputLocation) -> ParseInnerError {
         ParseInnerError {
             kind: self,
@@ -107,7 +116,7 @@ impl ParseErrorKind {
         }
     }
 
-    pub(super) fn into_inner_spanned(self, span: &pest::Span<'_>) -> ParseInnerError {
+    pub(super) fn into_inner_pest_spanned(self, span: &pest::Span<'_>) -> ParseInnerError {
         ParseInnerError {
             kind: self,
             reason: None,

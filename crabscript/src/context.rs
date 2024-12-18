@@ -10,7 +10,7 @@ use crate::{
 
 pub struct Context {
     pub cur_dir: Option<PathBuf>,
-    pub variables: HashMap<String, CommandOutput>,
+    pub variables: HashMap<Box<str>, CommandOutput>,
     parsers: HashMap<Rc<str>, InstructionParser>,
 }
 

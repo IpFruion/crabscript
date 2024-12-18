@@ -40,18 +40,25 @@ impl Runtime {
         for directive in self.directives {
             match directive {
                 Directive::GoTo(_) => todo!(),
-                Directive::Instruction { span, instruction } => {
-                    match instruction.run(&mut self.ctx) {
-                        Ok(_out) => (),
-                        Err(inner) => {
-                            return Err(RuntimeError {
-                                inner,
-                                src: self.src,
-                                span,
-                            })
+                Directive::Instruction {
+                    span,
+                    instruction,
+                    output,
+                    ..
+                } => match instruction.run(&mut self.ctx) {
+                    Ok(out) => {
+                        if let Some(output) = output {
+                            self.ctx.variables.insert(output, out);
                         }
                     }
-                }
+                    Err(inner) => {
+                        return Err(RuntimeError {
+                            inner,
+                            src: self.src,
+                            span,
+                        })
+                    }
+                },
             };
         }
         Ok(())
@@ -59,10 +66,12 @@ impl Runtime {
 }
 
 pub enum Directive {
-    GoTo(String),
+    GoTo(Box<str>),
     Instruction {
+        label: Option<Box<str>>,
         span: SourceSpan,
         instruction: Instruction,
+        output: Option<Box<str>>,
     },
 }
 
