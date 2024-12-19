@@ -2,7 +2,7 @@ pub(crate) mod parser;
 pub mod source;
 
 use miette::{Diagnostic, LabeledSpan, SourceSpan};
-use parser::ParseError;
+pub use parser::{ParseError, ParseErrorKind};
 use thiserror::Error;
 
 use crate::{
@@ -27,13 +27,11 @@ impl Runtime {
         }
     }
 
-    pub fn with_src<S: Into<SourceCode>>(mut self, s: S) -> Self {
-        self.src = Some(s.into());
-        self
-    }
-
-    pub fn parse(ctx: Context, name: &str, src: String) -> Result<Self, ParseError> {
-        parser::parse_runtime(ctx, name, src)
+    pub fn parse(ctx: Context, src: SourceCode) -> Result<Self, ParseError> {
+        parser::parse_runtime(ctx, &src).map(|mut runtime| {
+            runtime.src = Some(src);
+            runtime
+        })
     }
 
     pub fn run(mut self) -> Result<(), RuntimeError> {

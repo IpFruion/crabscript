@@ -1,0 +1,31 @@
+{
+  "grammars": [
+    {
+      "name": "crabscript",
+      "camelcase": "Crabscript",
+      "scope": "source.crabscript",
+      "path": ".",
+      "file-types": [
+        "crab"
+      ],
+      "highlights": "queries/highlights.scm",
+      "injection-regex": "^(crab|crabscript)$"
+    }
+  ],
+  "metadata": {
+    "version": "0.0.1",
+    "license": "MIT",
+    "description": "Crabscript grammar for tree-sitter",
+    "links": {
+      "repository": "https://github.com/IpFruion/crabscript/tree-sitter-crabscript"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true
+  }
+}

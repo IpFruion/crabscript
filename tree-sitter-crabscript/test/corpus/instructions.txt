@@ -1,0 +1,79 @@
+=============
+Single Command
+=============
+
+ls
+
+----
+
+(source_file (directive (instruction (ident))))
+
+=============
+Basic Command
+=============
+
+echo hello world
+
+----
+
+(source_file (directive (instruction (ident) (arg) (arg))))
+
+==================
+Quotes Command Arg
+==================
+
+echo "hello world"
+
+----
+
+(source_file (directive (instruction (ident) (arg))))
+
+=======================
+Inner Quote Command Arg
+=======================
+
+echo "hello \" world"
+
+----
+
+(source_file (directive (instruction (ident) (arg))))
+
+=======================
+Mix Command Args
+=======================
+
+echo "hello the" world
+
+----
+
+(source_file (directive (instruction (ident) (arg) (arg))))
+
+==============
+Output Command
+==============
+
+var = set hello
+
+----
+
+(source_file (directive (instruction (ident) (ident) (arg))))
+
+==============
+Labeled Command
+==============
+
+:label echo hello
+
+----
+
+(source_file (directive (instruction (ident) (ident) (arg))))
+
+==============
+Full Command
+==============
+
+:label var = set hello
+
+----
+
+(source_file (directive (instruction (ident) (ident) (ident) (arg))))
