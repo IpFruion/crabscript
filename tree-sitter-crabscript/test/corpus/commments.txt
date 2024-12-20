@@ -1,0 +1,43 @@
+=====
+Empty
+=====
+
+
+
+-----
+
+(source_file)
+
+========
+Comment
+========
+
+# Test Comment
+
+----
+
+(source_file)
+
+=================
+Multiple Comments
+=================
+
+# Test Comment
+# multiple lines 
+
+----
+
+(source_file )
+
+====================================
+Multiple Comments on different lines
+====================================
+
+# Test Comment
+
+
+# multiple lines 
+
+----
+
+(source_file )

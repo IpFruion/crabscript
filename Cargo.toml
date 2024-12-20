@@ -1,3 +1,10 @@
 [workspace]
-members = ["crabscript", "crabscript_cli", "crabscript_derive"]
+members = [
+  "crabscript",
+  "crabscript_cli",
+  "crabscript_derive",
+  "tree-sitter-crabscript",
+]
 resolver = "2"
+package.version = "0.0.1"
+package.edition = "2021"

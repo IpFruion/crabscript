@@ -2,6 +2,7 @@ use std::{ops::Deref, sync::Arc};
 
 use miette::NamedSource;
 
+/// Represents the source code of `crabscript`
 #[derive(Clone, Debug)]
 pub enum SourceCode {
     Named(NamedSource<Arc<str>>),
@@ -9,6 +10,10 @@ pub enum SourceCode {
 }
 
 impl SourceCode {
+    pub fn named<N: AsRef<str>, S: Into<Arc<str>>>(name: N, src: S) -> Self {
+        SourceCode::Named(NamedSource::new(name, src.into()).with_language("crabscript"))
+    }
+
     pub fn as_named(&self, name: &str, language: Option<String>) -> Self {
         let mut source = match self {
             SourceCode::Named(s) => NamedSource::new(name, s.inner().clone()),

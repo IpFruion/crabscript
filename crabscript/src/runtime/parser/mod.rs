@@ -1,136 +1,118 @@
-mod error;
-use std::{collections::HashMap, rc::Rc, sync::Arc};
+pub mod error;
+mod tokenizer;
+use std::{collections::HashMap, ops::Deref, rc::Rc};
 
 use clap::{CommandFactory, FromArgMatches};
-use error::ParseInnerError;
+use error::ParseErrorBuilder;
 pub use error::{ParseError, ParseErrorKind};
-use miette::{NamedSource, SourceSpan};
-use pest::{
-    iterators::{Pair, Pairs},
-    Parser,
-};
-use pest_derive::Parser;
+use miette::SourceSpan;
+use tokenizer::{tokenize, CrabscriptCursor, Field, NodeKind};
 
 use crate::{
     command::{Command, CommandOutput},
     context::Context,
 };
 
-use super::{Directive, Instruction, Runtime};
+use super::{source::SourceCode, Directive, Instruction, Runtime};
 
-pub struct Span(SourceSpan);
+pub fn parse_runtime(ctx: Context, src: &SourceCode) -> Result<Runtime, ParseError> {
+    let tree = tokenize(src.deref()).map_err(|builder| builder.build(src.clone()))?;
+    let mut cursor = CrabscriptCursor::new(src, tree.walk());
 
-impl From<&pest::Span<'_>> for Span {
-    fn from(value: &pest::Span<'_>) -> Self {
-        Span(SourceSpan::new(
-            value.start().into(),
-            value.end() - value.start(),
-        ))
-    }
-}
-
-#[derive(Parser)]
-#[grammar = "crabscript.pest"]
-struct CrabShellParser;
-
-pub fn parse_runtime(ctx: Context, name: &str, src: String) -> Result<Runtime, ParseError> {
-    let src: NamedSource<Arc<str>> = NamedSource::new(name, src.into()).with_language("crabshell");
-    let mut pairs = match CrabShellParser::parse(Rule::program, src.inner()) {
-        Ok(pairs) => pairs,
-        Err(err) => {
-            return Err(ParseErrorKind::Tokenizer(err.to_string().into())
-                .into_inner_location(err.location)
-                .into_parse_err(src))
-        }
-    };
-    let program = pairs.next().expect("must have program");
     let mut directives = Vec::new();
-    for prog_line in program.into_inner() {
-        match prog_line.as_rule() {
-            Rule::line => {
-                if let Some(script_instruction) = prog_line.into_inner().next() {
-                    let directive = match parse_directive(&ctx, script_instruction.into_inner()) {
-                        Ok(directive) => directive,
-                        Err(inner) => return Err(inner.into_parse_err(src)),
-                    };
-                    directives.push(directive);
+    if cursor.is_node_kind(NodeKind::SourceFile) {
+        if let Some(mut cursor) = cursor
+            .goto_child()
+            .map_err(|builder| builder.build(src.clone()))?
+        {
+            loop {
+                let directive = parse_directive(&ctx, &mut cursor)
+                    .map_err(|builder| builder.build(src.clone()))?;
+                directives.push(directive);
+                if !cursor
+                    .goto_next_named_sibling()
+                    .map_err(|builder| builder.build(src.clone()))?
+                {
+                    break;
                 }
             }
-            Rule::EOI => {
-                break;
-            }
-            _ => unreachable!("if it parsed something it should be a directive"),
         }
     }
 
-    Ok(Runtime::new(ctx, directives).with_src(src))
+    Ok(Runtime::new(ctx, directives))
 }
 
 fn parse_directive(
     ctx: &Context,
-    mut pairs: Pairs<'_, Rule>,
-) -> Result<Directive, ParseInnerError> {
-    let mut label = None;
-    let mut output = None;
+    cursor: &mut CrabscriptCursor<'_>,
+) -> Result<Directive, ParseErrorBuilder> {
+    if !cursor.is_node_kind(NodeKind::Directive) {
+        return Err(ParseErrorBuilder::new_tokenizer("not directive node").with_node(cursor.node()));
+    }
+    let mut cursor = cursor.goto_child()?.ok_or_else(|| {
+        ParseErrorBuilder::new_tokenizer("directive node has no child").with_node(cursor.node())
+    })?;
 
-    let mut piece = pairs.next().expect("at least one script_instruction");
-    if matches!(piece.as_rule(), Rule::label) {
-        let new_label = piece.into_inner().next().expect("ident").as_str().into();
-        let Some(next_piece) = pairs.next() else {
-            return Ok(Directive::GoTo(new_label));
-        };
-        label = Some(new_label);
-        piece = next_piece;
-    }
-    if matches!(piece.as_rule(), Rule::output) {
-        output = Some(piece.into_inner().next().expect("ident").as_str().into());
-        piece = pairs.next().expect("at least cmd");
-    }
-    if matches!(piece.as_rule(), Rule::cmd_instruction) {
-        let (name, whole_cmd, args) = parse_cmd_instruction(piece);
-        let parser = ctx.get_parser(name.as_str()).ok_or_else(|| {
-            ParseErrorKind::CommandNotFound
-                .into_inner_spanned_with_reason(&name, "command not found")
+    if cursor.node().kind_id() == NodeKind::Instruction {
+        let mut cursor = cursor.goto_child()?.ok_or_else(|| {
+            ParseErrorBuilder::new_tokenizer("instruction node has no child")
+                .with_node(cursor.node())
         })?;
-        let instruction = parser.0(whole_cmd, &args)?;
-        return Ok(Directive::Instruction {
-            label,
-            span: SourceSpan::new(
-                whole_cmd.start().into(),
-                whole_cmd.end() - whole_cmd.start(),
-            ),
+        let span = cursor.span();
+        let mut label = None;
+        let mut output = None;
+        if cursor.is_field(Field::Label) {
+            cursor.goto_next_named_sibling()?;
+            label = Some(cursor.span());
+            cursor.goto_next_named_sibling()?;
+        }
+        if cursor.is_field(Field::Output) {
+            output = Some(cursor.span());
+            cursor.goto_next_named_sibling()?;
+        }
+        if !cursor.is_field(Field::Cmd) {
+            return Err(
+                ParseErrorBuilder::new_tokenizer("cmd field not found on instruction")
+                    .with_node(cursor.node()),
+            );
+        }
+        let name = cursor.span();
+        let parser = ctx.get_parser(&name).ok_or_else(|| {
+            ParseErrorBuilder::new(ParseErrorKind::CommandNotFound)
+                .with_span(name.into())
+                .with_reason("command not found")
+        })?;
+        let mut args = Vec::new();
+        while cursor.goto_next_sibling()? && cursor.is_field(Field::Arg) {
+            args.push(cursor.span());
+        }
+
+        let instruction = parser.0(name, &args)?;
+
+        Ok(Directive::Instruction {
+            label: label.map(Into::into),
+            span: span.into(),
             instruction,
-            output,
-        });
-    }
-    unreachable!("invalid script instruction")
-}
-
-fn parse_cmd_instruction(
-    pair: Pair<'_, Rule>,
-) -> (pest::Span<'_>, pest::Span<'_>, Vec<pest::Span<'_>>) {
-    let whole_cmd = pair.as_span();
-    let mut cmd_instruction = pair.into_inner();
-    let name = cmd_instruction.next().expect("cmd").as_span();
-    let args: Vec<pest::Span> = parse_args(cmd_instruction);
-    (name, whole_cmd, args)
-}
-
-fn parse_args<'a>(args: impl Iterator<Item = Pair<'a, Rule>>) -> Vec<pest::Span<'a>> {
-    args.map(|arg| arg.into_inner().next().expect("inner arg"))
-        .map(|arg| match arg.as_rule() {
-            Rule::arg_raw => arg.as_span(),
-            Rule::arg_qouted => arg.as_span(),
-            _ => unreachable!("Not handled"),
+            output: output.map(Into::into),
         })
-        .collect()
+    } else if cursor.is_node_kind(NodeKind::Goto) {
+        let mut cursor = cursor.goto_child()?.ok_or_else(|| {
+            ParseErrorBuilder::new_tokenizer("goto node has no child").with_node(cursor.node())
+        })?;
+        cursor.goto_next_named_sibling()?;
+        Ok(Directive::GoTo(cursor.span().into()))
+    } else {
+        Err(ParseErrorBuilder::new_tokenizer(
+            "missing directive type (either not handled or invalid)",
+        )
+        .with_node(cursor.node()))
+    }
 }
 
 #[derive(Clone)]
 pub struct InstructionParser(Rc<InstructionParserFn>);
 
-type InstructionParserFn =
-    dyn Fn(pest::Span<'_>, &[pest::Span<'_>]) -> Result<Instruction, ParseInnerError>;
+type InstructionParserFn = dyn Fn(Span<'_>, &[Span<'_>]) -> Result<Instruction, ParseErrorBuilder>;
 
 impl InstructionParser {
     pub fn insert_parser<T>(commands: &mut HashMap<Rc<str>, Self>)
@@ -144,14 +126,46 @@ impl InstructionParser {
             InstructionParser(Rc::new(move |cmd_span, args| {
                 let matches = cmd
                     .clone()
-                    .try_get_matches_from(args.iter().map(|span| span.as_str()))
-                    .map_err(|err| ParseInnerError::from_clap_error(err, cmd_span, args))?;
+                    .try_get_matches_from(args.iter().map(|span| span.deref()))
+                    .map_err(|err| ParseErrorBuilder::from_clap_error(err, cmd_span, args))?;
                 let t = T::from_arg_matches(&matches)
-                    .map_err(|err| ParseInnerError::from_clap_error(err, cmd_span, args))?;
+                    .map_err(|err| ParseErrorBuilder::from_clap_error(err, cmd_span, args))?;
                 Ok(Instruction::new_generic(t))
             }))
         });
         //TODO: Handle aliases
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Span<'a> {
+    src: &'a str,
+    start: usize,
+    end: usize,
+}
+
+impl<'a> Deref for Span<'a> {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.src[self.start..self.end]
+    }
+}
+impl<'a> From<&Span<'a>> for SourceSpan {
+    fn from(val: &Span<'a>) -> Self {
+        (*val).into()
+    }
+}
+
+impl<'a> From<Span<'a>> for SourceSpan {
+    fn from(val: Span<'a>) -> Self {
+        SourceSpan::new(val.start.into(), val.end - val.start)
+    }
+}
+
+impl<'a> From<Span<'a>> for Box<str> {
+    fn from(value: Span<'a>) -> Self {
+        value.deref().into()
     }
 }
 
@@ -164,19 +178,19 @@ mod tests {
 
     use super::*;
 
+    fn test_source_code(value: &str) -> SourceCode {
+        SourceCode::named("parse_test", value)
+    }
+
     #[test]
     fn test_parse_empty() {
-        parse_runtime(Default::default(), "parse_test", "".to_string()).unwrap();
+        parse_runtime(Default::default(), &test_source_code("")).unwrap();
     }
 
     #[test]
     fn test_parse_command_not_found() {
-        let err = parse_runtime(
-            Default::default(),
-            "parse_test",
-            "mkdir testing".to_string(),
-        )
-        .unwrap_err();
+        let err =
+            parse_runtime(Default::default(), &test_source_code("mkdir testing")).unwrap_err();
 
         assert!(
             matches!(err.kind, ParseErrorKind::CommandNotFound),
@@ -211,7 +225,7 @@ mod tests {
         let mut context = Context::default();
         context.add_command::<TestCommand>();
 
-        let err = parse_runtime(context, "parse_test", "tc".to_string()).unwrap_err();
+        let err = parse_runtime(context, &test_source_code("tc")).unwrap_err();
 
         assert!(
             matches!(err.kind, ParseErrorKind::InvalidArg(_)),
@@ -226,7 +240,7 @@ mod tests {
         let mut context = Context::default();
         context.add_command::<TestCommand>();
 
-        let err = parse_runtime(context, "parse_test", "tc hello world".to_string()).unwrap_err();
+        let err = parse_runtime(context, &test_source_code("tc hello world")).unwrap_err();
 
         assert!(
             matches!(err.kind, ParseErrorKind::InvalidArg(_)),
@@ -241,7 +255,7 @@ mod tests {
         let mut context = Context::default();
         context.add_command::<TestCommand>();
 
-        let runtime = parse_runtime(context, "parse_test", "tc hello 32".to_string()).unwrap();
+        let runtime = parse_runtime(context, &test_source_code("tc hello 32")).unwrap();
 
         assert_eq!(runtime.directives.len(), 1);
     }
@@ -251,8 +265,7 @@ mod tests {
         let mut context = Context::default();
         context.add_command::<TestCommand>();
 
-        let err =
-            parse_runtime(context, "parse_test", "tc hello 32 --arg3".to_string()).unwrap_err();
+        let err = parse_runtime(context, &test_source_code("tc hello 32 --arg3")).unwrap_err();
 
         assert!(
             matches!(err.kind, ParseErrorKind::InvalidArg(_)),
@@ -267,8 +280,7 @@ mod tests {
         let mut context = Context::default();
         context.add_command::<TestCommand>();
 
-        let runtime =
-            parse_runtime(context, "parse_test", "var = tc hello 32".to_string()).unwrap();
+        let runtime = parse_runtime(context, &test_source_code("var = tc hello 32")).unwrap();
         assert_eq!(runtime.directives.len(), 1);
         match &runtime.directives[0] {
             Directive::GoTo(_) => unreachable!(),
@@ -284,8 +296,7 @@ mod tests {
         let mut context = Context::default();
         context.add_command::<TestCommand>();
 
-        let runtime =
-            parse_runtime(context, "parse_test", ":label tc hello 32".to_string()).unwrap();
+        let runtime = parse_runtime(context, &test_source_code(":label tc hello 32")).unwrap();
         assert_eq!(runtime.directives.len(), 1);
         match &runtime.directives[0] {
             Directive::GoTo(_) => unreachable!(),
@@ -301,18 +312,8 @@ mod tests {
         let mut context = Context::default();
         context.add_command::<TestCommand>();
 
-        let runtime = parse_runtime(context, "parse_test", ":label".to_string()).unwrap();
+        let runtime = parse_runtime(context, &test_source_code(":label")).unwrap();
         assert_eq!(runtime.directives.len(), 1);
         assert!(matches!(&runtime.directives[0], Directive::GoTo(s) if s.deref().eq("label")));
-    }
-
-    #[test]
-    fn test_parsing_tree_sitter() {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_crabscript::LANGUAGE.into())
-            .unwrap();
-        let tree = parser.parse("#Testing", None).unwrap();
-        println!("{tree:?}");
     }
 }

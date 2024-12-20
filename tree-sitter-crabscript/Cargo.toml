@@ -1,0 +1,31 @@
+[package]
+name = "tree-sitter-crabscript"
+description = "Crabscript grammar for tree-sitter"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+readme = "../README.md"
+keywords = ["incremental", "parsing", "tree-sitter", "crabscript"]
+categories = ["parsing", "text-editors"]
+repository = "https://github.com/IpFruion/crabscript/tree-sitter-crabscript"
+autoexamples = false
+build = "bindings/rust/build.rs"
+include = [
+  "bindings/rust/*",
+  "grammar.js",
+  "queries/*",
+  "src/*",
+  "tree-sitter.json",
+]
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[dev-dependencies]
+tree-sitter = { version = "0.24.5" }
+
+[build-dependencies]
+cc = "1.1"

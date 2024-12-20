@@ -1,0 +1,5 @@
+[tasks.ts]
+workspace = false
+cwd = "./tree-sitter-crabscript/"
+command = "tree-sitter"
+args = ["${@}"]

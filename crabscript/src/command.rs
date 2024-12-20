@@ -74,7 +74,7 @@ impl<T: ValueParserFactory + Clone + Sync + Send + 'static> TypedValueParser for
         _arg: Option<&clap::Arg>,
         value: &std::ffi::OsStr,
     ) -> Result<Self::Value, clap::Error> {
-        value.to_string_lossy();
+        let _ = value.to_string_lossy();
         let _inner_parser = clap::value_parser!(T);
         todo!()
     }
