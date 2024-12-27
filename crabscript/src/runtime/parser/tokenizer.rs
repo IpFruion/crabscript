@@ -1,4 +1,4 @@
-use tree_sitter::{Node, Tree, TreeCursor};
+use tree_sitter::{Node, Tree};
 
 use crate::runtime::source::SourceCode;
 
@@ -21,106 +21,148 @@ pub fn tokenize<S: AsRef<str>>(src: S) -> Result<Tree, ParseErrorBuilder> {
 }
 
 /// A wrapper to the [tree_sitter::TreeCursor] that includes being able to back to parent
-pub struct CrabscriptCursor<'a> {
+pub struct Cursor<'a> {
     src: &'a SourceCode,
-    cursor: TreeCursor<'a>,
+    current: Node<'a>,
 }
 
-impl<'a> CrabscriptCursor<'a> {
-    pub fn new(src: &'a SourceCode, cursor: TreeCursor<'a>) -> Self {
-        CrabscriptCursor { src, cursor }
+impl<'a> Cursor<'a> {
+    pub fn new(src: &'a SourceCode, root: Node<'a>) -> Self {
+        Cursor { src, current: root }
     }
+
     pub fn goto_next_named_sibling(&mut self) -> Result<bool, ParseErrorBuilder> {
-        let mut found = false;
-        while self.cursor.goto_next_sibling() {
-            if self.cursor.node().is_named() {
-                found = true;
-                break;
-            }
-        }
-        self.check_node()?;
-        Ok(found)
+        self.current
+            .next_named_sibling()
+            .map(|node| {
+                self.current = node;
+                self.check_node()?;
+                Ok(true)
+            })
+            .unwrap_or(Ok(false))
     }
 
     pub fn span(&self) -> Span<'a> {
-        let node = self.cursor.node();
         Span {
             src: self.src,
-            start: node.start_byte(),
-            end: node.end_byte(),
+            start: self.current.start_byte(),
+            end: self.current.end_byte(),
         }
     }
 
     pub fn goto_next_sibling(&mut self) -> Result<bool, ParseErrorBuilder> {
-        let res = self.cursor.goto_next_sibling();
-        self.check_node()?;
-        Ok(res)
+        self.current
+            .next_sibling()
+            .map(|node| {
+                self.current = node;
+                self.check_node()?;
+                Ok(true)
+            })
+            .unwrap_or(Ok(false))
     }
 
-    pub fn goto_child(&mut self) -> Result<Option<Self>, ParseErrorBuilder> {
-        Ok(if self.cursor.goto_first_child() {
-            self.check_node()?;
-            Some(CrabscriptCursor {
+    pub fn named_child(&self) -> Option<Result<Self, ParseErrorBuilder>> {
+        self.current.named_child(0).map(|node| {
+            let cursor = Cursor {
                 src: self.src,
-                cursor: self.cursor.clone(),
-            })
-        } else {
-            None
+                current: node,
+            };
+            cursor.check_node()?;
+            Ok(cursor)
         })
     }
 
     pub fn check_node(&self) -> Result<(), ParseErrorBuilder> {
-        let node = self.cursor.node();
-        if node.is_error() {
+        if self.current.is_error() {
             return Err(ParseErrorBuilder::new_tokenizer(format!(
                 "node {} error {}",
-                node.grammar_name(),
-                node.to_sexp()
+                self.current.grammar_name(),
+                self.current.to_sexp()
             ))
-            .with_node(node));
+            .with_node(self.current));
         }
-        if node.is_missing() {
+        if self.current.is_missing() {
             return Err(ParseErrorBuilder::new_tokenizer(format!(
                 "node {} missing {}",
-                node.grammar_name(),
-                node.to_sexp()
+                self.current.grammar_name(),
+                self.current.to_sexp()
             ))
-            .with_node(node));
+            .with_node(self.current));
         }
         Ok(())
     }
 
+    pub fn opt_child_by_field(&self, field: Field) -> Result<Option<Self>, ParseErrorBuilder> {
+        self.current
+            .child_by_field_id(field as u16)
+            .map(|node| {
+                let cursor = Cursor {
+                    src: self.src,
+                    current: node,
+                };
+                cursor.check_node()?;
+                Ok(cursor)
+            })
+            .transpose()
+    }
+
+    pub fn child_by_field(&self, field: Field) -> Result<Self, ParseErrorBuilder> {
+        self.current
+            .child_by_field_id(field as u16)
+            .ok_or_else(|| {
+                ParseErrorBuilder::new_tokenizer(format!(
+                    "{} has no child with field {:?}",
+                    self.current.grammar_name(),
+                    field
+                ))
+                .with_node(self.current)
+            })
+            .and_then(|node| {
+                let cursor = Cursor {
+                    src: self.src,
+                    current: node,
+                };
+                cursor.check_node()?;
+                Ok(cursor)
+            })
+    }
+
+    pub fn children_by_field(&self, field: Field) -> Result<Vec<Self>, ParseErrorBuilder> {
+        let mut cursor = self.current.walk();
+        self.current
+            .children_by_field_id(field.id(), &mut cursor)
+            .map(|node| self.new_child(node))
+            .collect()
+    }
+
+    fn new_child(&self, node: Node<'a>) -> Result<Self, ParseErrorBuilder> {
+        let cursor = Cursor {
+            src: self.src,
+            current: node,
+        };
+        cursor.check_node()?;
+        Ok(cursor)
+    }
+
     #[inline]
     pub fn node(&self) -> Node<'a> {
-        self.cursor.node()
+        self.current
     }
 
     /// Checks the current node is of a [NodeKind]
     #[inline]
     pub fn is_node_kind(&self, kind: NodeKind) -> bool {
-        self.cursor.node().kind_id() == kind
-    }
-
-    /// Checks the current node if it is the field
-    #[inline]
-    pub fn is_field(&self, field: Field) -> bool {
-        matches!(self.cursor.field_id(), Some(id) if id == field)
+        self.current.kind_id() == kind
     }
 }
 
-impl<'a> std::fmt::Debug for CrabscriptCursor<'a> {
+impl<'a> std::fmt::Debug for Cursor<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         //TODO: Add source debug information?
         f.debug_tuple("CrabscriptCursor")
-            .field(&self.cursor.node().grammar_name())
-            .field(&self.cursor.node())
-            .field(&self.cursor.node().to_sexp())
+            .field(&self.current.grammar_name())
+            .field(&self.current)
+            .field(&self.current.to_sexp())
             .finish()
-    }
-}
-
-impl<'a> Drop for CrabscriptCursor<'a> {
-    fn drop(&mut self) {
-        self.cursor.goto_parent();
     }
 }

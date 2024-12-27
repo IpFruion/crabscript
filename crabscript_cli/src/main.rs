@@ -11,7 +11,8 @@ fn main() -> miette::Result<()> {
     let file = args.next().ok_or(miette!("missing crabscript file"))?;
     let contents = std::fs::read_to_string(&file).into_diagnostic()?;
     let src = SourceCode::named(&file, contents);
-    let runtime = Runtime::parse(Context::init(), src)?;
+    let ctx = Context::init(args);
+    let runtime = Runtime::parse(ctx, src)?;
     runtime.run()?;
     Ok(())
 }

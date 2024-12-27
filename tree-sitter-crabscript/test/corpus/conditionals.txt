@@ -1,0 +1,73 @@
+=====================
+If Variable 
+=====================
+
+if ${var}
+end
+
+----
+
+(source_file (directive (cond_if (variable_arg (ident)))))
+
+=====================
+If Command 
+=====================
+
+if eq "one" "two"
+end
+
+----
+
+(source_file (directive (cond_if (ident) (arg) (arg))))
+
+=====================
+If Content 
+=====================
+
+if eq "one" "two"
+  echo "made it"
+end
+
+----
+
+(source_file (directive (cond_if (ident) (arg) (arg) (directive (instruction (ident) (arg))))))
+
+=====================
+If Chain
+=====================
+
+if eq "one" "two"
+  if ne "two" "three"
+    echo "made it"
+  end
+end
+
+----
+
+(source_file (directive (cond_if (ident) (arg) (arg) 
+  (directive (cond_if (ident) (arg) (arg) (directive (instruction (ident) (arg)))))
+)))
+
+=====================
+While Command 
+=====================
+
+while ge ${i} 0
+  i = set -1
+end
+
+----
+
+(source_file (directive (cond_while (ident) (arg (variable_arg (ident))) (arg) (directive (instruction (ident) (ident) (arg))))))
+
+=====================
+While Variable 
+=====================
+
+while ${should_continue}
+  should_continue = set false
+end
+
+----
+
+(source_file (directive (cond_while (variable_arg (ident)) (directive (instruction (ident) (ident) (arg))))))

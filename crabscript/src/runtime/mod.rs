@@ -1,12 +1,15 @@
+pub mod directive;
+pub mod instruction;
 pub(crate) mod parser;
 pub mod source;
 
+use directive::Directive;
 use miette::{Diagnostic, LabeledSpan, SourceSpan};
 pub use parser::{ParseError, ParseErrorKind};
 use thiserror::Error;
 
 use crate::{
-    command::{Command, CommandError, CommandOutput},
+    command::{CommandError, CommandOutput},
     context::Context,
 };
 use source::SourceCode;
@@ -37,7 +40,6 @@ impl Runtime {
     pub fn run(mut self) -> Result<(), RuntimeError> {
         for directive in self.directives {
             match directive {
-                Directive::GoTo(_) => todo!(),
                 Directive::Instruction {
                     span,
                     instruction,
@@ -46,7 +48,9 @@ impl Runtime {
                 } => match instruction.run(&mut self.ctx) {
                     Ok(out) => {
                         if let Some(output) = output {
-                            self.ctx.variables.insert(output, out);
+                            if let CommandOutput::VariableValue(v) = out {
+                                self.ctx.variables.insert(output, v);
+                            }
                         }
                     }
                     Err(inner) => {
@@ -57,65 +61,10 @@ impl Runtime {
                         })
                     }
                 },
+                _ => todo!(),
             };
         }
         Ok(())
-    }
-}
-
-pub enum Directive {
-    GoTo(Box<str>),
-    Instruction {
-        label: Option<Box<str>>,
-        span: SourceSpan,
-        instruction: Instruction,
-        output: Option<Box<str>>,
-    },
-}
-
-impl std::fmt::Debug for Directive {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::GoTo(arg0) => f.debug_tuple("GoTo").field(arg0).finish(),
-            Self::Instruction { .. } => f.debug_tuple("Instruction").finish(),
-        }
-    }
-}
-
-pub struct Instruction(Box<dyn Command<Output = CommandOutput>>);
-
-impl Instruction {
-    pub fn new<C: Command<Output = CommandOutput> + 'static>(cmd: C) -> Self {
-        Instruction(Box::new(cmd))
-    }
-
-    pub fn new_generic<C: Command + 'static>(cmd: C) -> Self
-    where
-        C::Output: Into<CommandOutput>,
-    {
-        Self::new(GenericInstruction::new(cmd))
-    }
-
-    #[inline]
-    pub fn run(self, ctx: &mut Context) -> Result<CommandOutput, CommandError> {
-        self.0.run(ctx)
-    }
-}
-
-/// A generic instruction that uses [Into<CommandOutput>] for conversion of the [Command]
-pub struct GenericInstruction<C>(C);
-
-impl<T, C: Command<Output = T>> GenericInstruction<C> {
-    pub fn new(cmd: C) -> Self {
-        GenericInstruction(cmd)
-    }
-}
-
-impl<T: Into<CommandOutput>, C: Command<Output = T>> Command for GenericInstruction<C> {
-    type Output = CommandOutput;
-
-    fn run(&self, ctx: &mut Context) -> Result<Self::Output, CommandError> {
-        Ok(self.0.run(ctx)?.into())
     }
 }
 

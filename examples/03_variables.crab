@@ -1,0 +1,5 @@
+#!crabscript
+
+language = set "Rust"
+
+echo ${language}

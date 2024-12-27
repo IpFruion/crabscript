@@ -12,9 +12,12 @@ fn main() {
     let kinds = (0..language.node_kind_count()).filter_map(|i| {
         language
             .node_kind_for_id(i as u16)
-            .filter(|_| language.node_kind_is_visible(i as u16))
+            .filter(|_| {
+                language.node_kind_is_visible(i as u16) && language.node_kind_is_named(i as u16)
+            })
             .filter(|s| s.len() > 1)
             .map(|name| {
+                println!("{name}");
                 let name = format_ident!("{}", pascal_case(name));
                 let i = i as isize;
                 quote! {#name = #i}
@@ -34,7 +37,7 @@ fn main() {
 
         #[allow(unused)]
         #[non_exhaustive]
-        #[derive(Clone, Copy)]
+        #[derive(Clone, Copy, Debug)]
         pub enum NodeKind {
             #(#kinds),*
         }
@@ -53,9 +56,15 @@ fn main() {
 
         #[allow(unused)]
         #[non_exhaustive]
-        #[derive(Clone, Copy)]
+        #[derive(Clone, Copy, Debug)]
         pub enum Field {
             #(#fields),*
+        }
+
+        impl Field {
+            pub const fn id(self) -> std::num::NonZero<u16> {
+                unsafe { std::num::NonZero::new_unchecked(self as u16) }
+            }
         }
 
         impl std::cmp::PartialEq<u16> for Field {
@@ -75,6 +84,7 @@ fn main() {
                 self.get() == *other as u16
             }
         }
+
         impl std::cmp::PartialEq<std::num::NonZero<u16>> for Field {
             fn eq(&self, other: &std::num::NonZero<u16>) -> bool {
                 *self as u16 == other.get()

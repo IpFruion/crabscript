@@ -44,6 +44,7 @@ pub enum ParseErrorKind {
     InvalidArg(Box<str>),
 }
 
+#[derive(Debug)]
 pub(super) struct ParseErrorBuilder {
     kind: ParseErrorKind,
     span: Option<SourceSpan>,

@@ -1,0 +1,5 @@
+if eq "one" "two"
+  if ne "two" "three"
+    echo "made it"
+  end
+end

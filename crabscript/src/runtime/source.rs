@@ -49,6 +49,15 @@ impl Deref for SourceCode {
     }
 }
 
+impl AsRef<str> for SourceCode {
+    fn as_ref(&self) -> &str {
+        match self {
+            SourceCode::Unnamed(s) => s,
+            SourceCode::Named(s) => s.inner(),
+        }
+    }
+}
+
 impl miette::SourceCode for SourceCode {
     fn read_span<'a>(
         &'a self,

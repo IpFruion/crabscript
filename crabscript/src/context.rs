@@ -1,61 +1,72 @@
-use std::{collections::HashMap, env::current_dir, path::PathBuf, rc::Rc};
+use std::{borrow::Cow, collections::HashMap, env::current_dir, path::PathBuf};
 
 use clap::{CommandFactory, FromArgMatches};
 
 use crate::{
     command::{Command, CommandOutput},
-    runtime::parser::InstructionParser,
-    sdk::echo::Echo,
+    runtime::parser::InstructionParsers,
 };
 
+#[derive(Debug, Default)]
 pub struct Context {
     pub cur_dir: Option<PathBuf>,
-    pub variables: HashMap<Box<str>, CommandOutput>,
-    parsers: HashMap<Rc<str>, InstructionParser>,
+    pub variables: HashMap<Box<str>, Variable>,
+    parser: InstructionParsers,
 }
 
 impl Context {
-    pub fn init() -> Self {
-        let mut ctx = Context {
+    /// Initializes with environment and sdk commands if added in feature selection
+    pub fn init<S: Into<String>, I: Iterator<Item = S>>(args: I) -> Self {
+        let variables = args
+            .enumerate()
+            .map(|(i, v)| (i.to_string().into(), Variable::String(v.into())))
+            .collect();
+        Context {
             cur_dir: current_dir().ok(),
-            ..Default::default()
-        };
-        ctx.add_command::<Echo>();
-        ctx
-    }
-}
-
-impl std::fmt::Debug for Context {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Context")
-            .field("cur_dir", &self.cur_dir)
-            .field("variables", &self.variables)
-            .finish()
-    }
-}
-
-/// Creates an empty [Context] with zero internal commands, variables, and empty current directory.
-impl Default for Context {
-    fn default() -> Self {
-        Self {
-            cur_dir: None,
-            variables: Default::default(),
-            parsers: Default::default(),
+            variables,
+            parser: InstructionParsers::init(),
         }
     }
-}
 
-impl Context {
     #[inline]
     pub fn add_command<T>(&mut self)
     where
         T: CommandFactory + FromArgMatches + Command + 'static,
-        T::Output: Into<CommandOutput> + 'static,
+        T::Output: Into<CommandOutput>,
     {
-        InstructionParser::insert_parser::<T>(&mut self.parsers);
+        self.parser.add_parser::<T>()
     }
 
-    pub fn get_parser(&self, name: &str) -> Option<&InstructionParser> {
-        self.parsers.get(name)
+    pub(crate) fn get_parser(&self) -> &InstructionParsers {
+        &self.parser
+    }
+}
+
+/// The Value of a variable
+#[derive(Debug)]
+pub enum Variable {
+    String(String),
+    Boolean(bool),
+}
+
+pub trait VariableResolver: ToOwned {
+    fn resolve(variable: &Variable) -> Cow<'_, Self>;
+}
+
+impl VariableResolver for String {
+    fn resolve(variable: &Variable) -> Cow<'_, Self> {
+        match variable {
+            Variable::String(s) => Cow::Borrowed(s),
+            Variable::Boolean(b) => Cow::Owned(b.to_string()),
+        }
+    }
+}
+
+impl VariableResolver for Box<str> {
+    fn resolve(variable: &Variable) -> Cow<'_, Self> {
+        match variable {
+            Variable::String(s) => Cow::Owned(Box::from(s.as_str())),
+            Variable::Boolean(b) => Cow::Owned(b.to_string().into()),
+        }
     }
 }

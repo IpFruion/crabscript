@@ -28,6 +28,16 @@ echo "hello world"
 
 (source_file (directive (instruction (ident) (arg))))
 
+====================
+Variable Command Arg
+====================
+
+echo ${var}
+
+----
+
+(source_file (directive (instruction (ident) (arg (variable_arg (ident))))))
+
 =======================
 Inner Quote Command Arg
 =======================

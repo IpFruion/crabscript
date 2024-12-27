@@ -1,0 +1,3 @@
+while ge ${i} 0
+  i = set -1
+end
